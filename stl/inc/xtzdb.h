@@ -27,12 +27,44 @@ struct _RegistryLeapSecondInfo {
     uint16_t _Reserved;
 };
 
+typedef double _SysTimeRep;
+
+struct _TzdbInitInfo {
+    size_t _Num_time_zones;
+    const char** _Names;
+    const char** _Standard_abbrev{nullptr}; // TODO
+    const char** _Daylight_abbrev{nullptr}; // TODO
+};
+
+struct _Sys_time_info {
+    _SysTimeRep begin;
+    _SysTimeRep end;
+    int32_t offset;
+    int32_t save;
+};
+
+struct _Local_time_info {
+    int result;
+    _Sys_time_info first;
+    _Sys_time_info second;
+};
+
 _EXTERN_C
 
 _RegistryLeapSecondInfo* __stdcall __std_tzdb_get_reg_leap_seconds(
     size_t _Prev_reg_ls_size, size_t* _Current_reg_ls_size);
 
 void __stdcall __std_decalloc_reg_leap_seconds(_RegistryLeapSecondInfo* _Rlsi);
+
+_NODISCARD _TzdbInitInfo* __stdcall __std_tzdb_init();
+void __stdcall __std_tzdb_dealloc_init_info(_TzdbInitInfo* _Info);
+
+_NODISCARD const char* __stdcall __std_tzdb_get_current_zone();
+void __stdcall __std_tzdb_dealloc_current_zone(const char* _Tz);
+
+_NODISCARD const _Sys_time_info __stdcall __std_tzbd_get_sys_info(const char* _Tz, size_t _Tz_len, _SysTimeRep _Sys);
+_NODISCARD const _Local_time_info __stdcall __std_tzbd_get_local_info(
+    const char* _Tz, size_t _Tz_len, _SysTimeRep _Local);
 
 _NODISCARD void* __stdcall __std_calloc_crt(size_t _Count, size_t _Size);
 void __stdcall __std_free_crt(void* _Ptr);

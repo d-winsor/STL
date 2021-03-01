@@ -2092,6 +2092,147 @@ namespace chrono {
         return hours{_Ret};
     }
 
+    // [time.zone.info]
+
+    struct sys_info {
+        sys_seconds begin;
+        sys_seconds end;
+        seconds offset;
+        minutes save;
+        string abbrev;
+    };
+
+    struct local_info {
+        static constexpr int unique      = 0;
+        static constexpr int nonexistent = 1;
+        static constexpr int ambiguous   = 2;
+
+        int result;
+        sys_info first;
+        sys_info second;
+    };
+
+    // [time.zone.exception]
+
+    class nonexistent_local_time : public runtime_error {
+    public:
+        template <class Duration>
+        nonexistent_local_time(const local_time<Duration>&, const local_info&) : runtime_error("") {
+            // TRANSITION: work in progress
+        }
+    };
+
+    class ambiguous_local_time : public runtime_error {
+    public:
+        template <class Duration>
+        ambiguous_local_time(const local_time<Duration>&, const local_info&) : runtime_error("") {
+            // TRANSITION: work in progress
+        }
+    };
+
+    // [time.zone.timezone]
+
+    enum class choose { earliest, latest };
+
+    class time_zone {
+    public:
+        time_zone(const std::string& _Name) : _Name(_Name) {}
+
+        time_zone(time_zone&&) = default;
+        time_zone& operator=(time_zone&&) = default;
+
+        _NODISCARD string_view name() const noexcept {
+            return _Name;
+        }
+
+        using _Internal_duration = duration<_SysTimeRep, std::milli>;
+
+        template <class _Duration>
+        _NODISCARD sys_info get_info(const sys_time<_Duration>& _Sys) const {
+            using rep    = typename _Duration::rep;
+            using period = typename _Duration::period;
+            auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Sys.time_since_epoch());
+            auto _Info   = __std_tzbd_get_sys_info(_Name.c_str(), _Name.length(), _Dur.count());
+            return _Convert_sys_info(_Info);
+        }
+
+        template <class _Duration>
+        _NODISCARD local_info get_info(const local_time<_Duration>& _Local) const {
+            using rep    = typename _Duration::rep;
+            using period = typename _Duration::period;
+            auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Local.time_since_epoch());
+            auto _Info   = __std_tzbd_get_local_info(_Name.c_str(), _Name.length(), _Dur.count());
+            local_info _Local_info;
+            _Local_info.result = _Info.result;
+            _Local_info.first  = _Convert_sys_info(_Info.first);
+            if (_Local_info.result == local_info::unique) {
+                _Local_info.second = {};
+            } else {
+                _Local_info.second = _Convert_sys_info(_Info.second);
+            }
+
+            return _Local_info;
+        }
+
+        template <class _Duration>
+        _NODISCARD sys_time<common_type_t<_Duration, seconds>> to_sys(const local_time<_Duration>& _Local) const {
+            auto _Info = get_info(_Local);
+            if (_Info.result == local_info::nonexistent) {
+                throw nonexistent_local_time(_Local, _Info);
+            } else if (_Info.result == local_info::ambiguous) {
+                throw ambiguous_local_time(_Local, _Info);
+            }
+
+            return sys_time<_Duration>{_Local.time_since_epoch()} - _Info.first.offset;
+        }
+
+        template <class _Duration>
+        _NODISCARD sys_time<common_type_t<_Duration, seconds>> to_sys(
+            const local_time<_Duration>& _Local, choose _Choose) const {
+            auto _Info   = get_info(_Local);
+            auto _Result = sys_time<_Duration>{_Local.time_since_epoch()};
+            if (_Info.result == local_info::nonexistent) {
+                // local times that don't exist are equivalent to the same time in UTC
+                return _Info.first.end;
+            }
+
+            auto _Offset = (_Info.result == local_info::unique || _Choose == choose::earliest) ? _Info.first.offset
+                                                                                               : _Info.second.offset;
+            return sys_time<_Duration>{_Local.time_since_epoch()} - _Offset;
+        }
+
+        template <class _Duration>
+        _NODISCARD local_time<common_type_t<_Duration, seconds>> to_local(const sys_time<_Duration>& _Sys) const {
+            auto _Info = get_info(_Sys);
+            return {(_Sys + _Info.offset).time_since_epoch()};
+        }
+
+    private:
+        static sys_info _Convert_sys_info(const _Sys_time_info& _Info) {
+            auto _Begin  = duration_cast<sys_seconds::duration>(_Internal_duration{_Info.begin});
+            auto _End    = duration_cast<sys_seconds::duration>(_Internal_duration{_Info.end});
+            auto _Offset = duration_cast<seconds>(_Internal_duration{_Info.offset});
+            auto _Save   = duration_cast<minutes>(_Internal_duration{_Info.save});
+            sys_info _Sys_info{};
+            _Sys_info.begin  = sys_time<seconds>{} + _Begin;
+            _Sys_info.end    = sys_time<seconds>{} + _End;
+            _Sys_info.offset = _Offset;
+            _Sys_info.save   = _Save;
+            // TODO: _Sys_info.abbrev = ...;
+            return _Sys_info;
+        }
+
+        std::string _Name;
+    };
+
+    // _NODISCARD bool operator==(const time_zone& _Left, const time_zone& _Right) noexcept {
+    //     return _Left.name() == _Right.name();
+    // }
+
+    // _NODISCARD strong_ordering operator<=>(const time_zone& _Left, const time_zone& _Right) noexcept {
+    //     return _Left.name() <=> _Right.name();
+    // }
+
     // [time.zone.leap]
 
     class leap_second {
@@ -2186,9 +2327,50 @@ namespace chrono {
 
     // TRANSITION: work in progress
     struct tzdb {
-        vector<leap_second, _Crt_allocator<leap_second>> leap_seconds;
+        vector<time_zone> time_zones;
+        vector<leap_second> leap_seconds;
         bool _All_ls_positive;
+
+        _NODISCARD const time_zone* locate_zone(string_view _Tz_name) const {
+            for (const time_zone& _Tz : time_zones) {
+                if (_Tz.name() == _Tz_name) {
+                    return &_Tz;
+                }
+            }
+
+            return nullptr;
+        }
+
+        _NODISCARD const time_zone* current_zone() const {
+            unique_ptr<const char[], decltype(&__std_tzdb_dealloc_current_zone)> _Current_zone(
+                __std_tzdb_get_current_zone(), &__std_tzdb_dealloc_current_zone);
+            if (_Current_zone) {
+                std::string _Tz_name{_Current_zone.get()};
+                for (const time_zone& _Tz : time_zones) {
+                    if (_Tz.name() == _Tz_name) {
+                        return &_Tz;
+                    }
+                }
+            }
+
+            return nullptr;
+        }
     };
+
+    _NODISCARD inline vector<time_zone> _Xtzdb_generate_time_zones() {
+        unique_ptr<_TzdbInitInfo, decltype(&__std_tzdb_dealloc_init_info)> _Info(
+            __std_tzdb_init(), &__std_tzdb_dealloc_init_info);
+        if (!_Info) {
+            throw std::runtime_error("Failed to initialize tzdb");
+        }
+
+        vector<time_zone> _Time_zones{};
+        for (size_t _Idx = 0; _Idx < _Info->_Num_time_zones; ++_Idx) {
+            _Time_zones.push_back(std::string{_Info->_Names[_Idx]});
+        }
+
+        return _Time_zones;
+    }
 
     _NODISCARD inline pair<decltype(tzdb::leap_seconds), bool> _Xtzdb_generate_leap_seconds(
         const size_t _Current_size) {
@@ -2271,8 +2453,9 @@ namespace chrono {
         tzdb_list& operator=(const tzdb_list&) = delete;
 
         tzdb_list() {
+            auto _Time_zones                   = _Xtzdb_generate_time_zones();
             auto [_Leap_sec, _All_ls_positive] = _Xtzdb_generate_leap_seconds(0);
-            _Tzdb_list.emplace_front(tzdb{_STD move(_Leap_sec), _All_ls_positive});
+            _Tzdb_list.emplace_front(tzdb{_STD move(_Time_zones), _STD move(_Leap_sec), _All_ls_positive});
         }
 
         _NODISCARD const tzdb& front() const noexcept {
@@ -2288,9 +2471,10 @@ namespace chrono {
 
         const tzdb& _Reload() {
             _Unique_lock _Lk(_Tzdb_mutex);
+            auto _Time_zones                   = _Xtzdb_generate_time_zones();
             auto [_Leap_sec, _All_ls_positive] = _Xtzdb_generate_leap_seconds(_Tzdb_list.front().leap_seconds.size());
             if (!_Leap_sec.empty()) {
-                _Tzdb_list.emplace_front(tzdb{_STD move(_Leap_sec), _All_ls_positive});
+                _Tzdb_list.emplace_front(tzdb{_STD move(_Time_zones), _STD move(_Leap_sec), _All_ls_positive});
             }
             return _Tzdb_list.front();
         }
