@@ -7,6 +7,9 @@
 using namespace std;
 using namespace std::chrono;
 
+static constexpr sys_seconds min_date{sys_days{year::min() / January / day{1}}};
+static constexpr sys_seconds max_date{sys_days{year::max() / December / day{31}}};
+
 //
 // These test suites will assume all data from the IANA database is correct
 // and will not test historical changes in transitions. Instead the focus
@@ -46,6 +49,11 @@ static constexpr auto Sydney_daylight_2020 =
 //
 // TODO: ...
 
+bool operator==(const sys_info& _Left, const sys_info& _Right) {
+    return _Left.begin == _Right.begin && _Left.end == _Right.end && _Left.offset == _Right.offset
+        && _Left.save == _Right.save && _Left.abbrev == _Right.abbrev;
+}
+
 void timezone_names_test() {
     const auto& tzdb = get_tzdb();
 
@@ -77,7 +85,7 @@ void timezone_sys_info_test() {
     assert(now_info.begin != sys_seconds{});
     assert(now_info.end != sys_seconds{});
     assert(now_info.offset == seconds{0});
-    // TODO: abbrev
+    assert(now_info.abbrev == "UTC");
 
     auto sydney_tz = tzdb.locate_zone(Sydney_tz_name);
     assert(sydney_tz != nullptr);
@@ -87,23 +95,39 @@ void timezone_sys_info_test() {
     assert(info1.end == Sydney_standard_2020);
     assert(info1.offset == Sydney_standard_offset - hours{1});
     assert(info1.save != minutes{0});
-    // TODO: abbrev
+    assert(info1.abbrev == "GMT+11"); // IANA datbase == "AEDT"
 
     auto info2 = sydney_tz->get_info(Sydney_daylight_2019 + days{3});
-    assert(info2.begin == info1.begin);
-    assert(info2.end == info1.end);
-    assert(info2.offset == info1.offset);
-    assert(info2.save == info1.save);
-    assert(info2.abbrev == info1.abbrev);
+    assert(info2 == info1);
 
     auto info3 = sydney_tz->get_info(Sydney_standard_2020);
     assert(info3.begin == Sydney_standard_2020);
     assert(info3.end == Sydney_daylight_2020);
     assert(info3.offset == Sydney_standard_offset);
     assert(info3.save == minutes{0});
-    // TODO: abbrev
+    assert(info3.abbrev == "GMT+10"); // IANA datbase == "AEST"
 
-    // TODO: test min & max transitions...
+    auto min_utc = utc_zone->get_info(min_date);
+    auto max_utc = utc_zone->get_info(max_date);
+    // Only a single transition in UTC
+    assert(min_utc == max_utc);
+    assert(min_utc.begin != sys_seconds{});
+    assert(min_utc.end != sys_seconds{});
+    // FIXME: data loss in double -> long long
+    // assert(min_utc.begin < max_utc.end);
+
+    // Min/max of transition should match with single UTC transition
+    auto min_syd = sydney_tz->get_info(min_date);
+    auto max_syd = sydney_tz->get_info(max_date);
+    assert(min_syd.begin <= min_utc.begin);
+    // FIXME: data loss in double -> long long
+    // assert(max_syd.end >= max_utc.end);
+
+    // Test abbrevations other than standard/daylight savings such as war time.
+    // These senarios are not handled correctly by icu.dll
+    auto ny_tz    = tzdb.locate_zone("America/New_York");
+    auto war_time = ny_tz->get_info(sys_days{year{1942} / April / day{1}});
+    assert(war_time.abbrev == "EDT"); // IANA datbase == "EWT"
 }
 
 bool test() {

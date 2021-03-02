@@ -32,9 +32,11 @@ EXPORTS
     __std_submit_threadpool_work
     __std_tzdb_dealloc_current_zone
     __std_tzdb_dealloc_init_info
+    __std_tzdb_dealloc_local_info
+    __std_tzdb_dealloc_sys_info
     __std_tzdb_get_current_zone
+    __std_tzbd_get_local_info
     __std_tzdb_get_reg_leap_seconds
     __std_tzbd_get_sys_info
-    __std_tzbd_get_local_info
     __std_tzdb_init
     __std_wait_for_threadpool_work_callbacks

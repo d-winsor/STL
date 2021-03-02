@@ -2152,8 +2152,13 @@ namespace chrono {
             using rep    = typename _Duration::rep;
             using period = typename _Duration::period;
             auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Sys.time_since_epoch());
-            auto _Info   = __std_tzbd_get_sys_info(_Name.c_str(), _Name.length(), _Dur.count());
-            return _Convert_sys_info(_Info);
+            std::unique_ptr<_Sys_time_info, decltype(&__std_tzdb_dealloc_sys_info)> _Info(
+                __std_tzbd_get_sys_info(_Name.c_str(), _Name.length(), _Dur.count()), &__std_tzdb_dealloc_sys_info);
+            if (!_Info) {
+                std::runtime_error("Failed to get sys_info"); // TODO
+            }
+
+            return _Convert_sys_info(_Info.get());
         }
 
         template <class _Duration>
@@ -2161,16 +2166,16 @@ namespace chrono {
             using rep    = typename _Duration::rep;
             using period = typename _Duration::period;
             auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Local.time_since_epoch());
-            auto _Info   = __std_tzbd_get_local_info(_Name.c_str(), _Name.length(), _Dur.count());
-            local_info _Local_info;
-            _Local_info.result = _Info.result;
-            _Local_info.first  = _Convert_sys_info(_Info.first);
-            if (_Local_info.result == local_info::unique) {
-                _Local_info.second = {};
-            } else {
-                _Local_info.second = _Convert_sys_info(_Info.second);
+            std::unique_ptr<_Local_time_info, decltype(&__std_tzbd_get_local_info)> _Info(
+                __std_tzbd_get_local_info(_Name.c_str(), _Name.length(), _Dur.count()), &__std_tzdb_dealloc_local_info);
+            if (_Info) {
+                std::runtime_error("Failed to get local_info"); // TODO
             }
 
+            local_info _Local_info;
+            _Local_info.result = _Info->result;
+            _Local_info.first  = _Convert_sys_info(_Info->first);
+            _Local_info.second = _Info->result == !local_info::unique ? _Convert_sys_info(_Info->second) : sys_info{};
             return _Local_info;
         }
 
@@ -2208,17 +2213,13 @@ namespace chrono {
         }
 
     private:
-        static sys_info _Convert_sys_info(const _Sys_time_info& _Info) {
-            auto _Begin  = duration_cast<sys_seconds::duration>(_Internal_duration{_Info.begin});
-            auto _End    = duration_cast<sys_seconds::duration>(_Internal_duration{_Info.end});
-            auto _Offset = duration_cast<seconds>(_Internal_duration{_Info.offset});
-            auto _Save   = duration_cast<minutes>(_Internal_duration{_Info.save});
+        static sys_info _Convert_sys_info(const _Sys_time_info* _Info) {
             sys_info _Sys_info{};
-            _Sys_info.begin  = sys_time<seconds>{} + _Begin;
-            _Sys_info.end    = sys_time<seconds>{} + _End;
-            _Sys_info.offset = _Offset;
-            _Sys_info.save   = _Save;
-            // TODO: _Sys_info.abbrev = ...;
+            _Sys_info.begin  = sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Info->begin})};
+            _Sys_info.end    = sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Info->end})};
+            _Sys_info.offset = duration_cast<seconds>(_Internal_duration{_Info->offset});
+            _Sys_info.save   = duration_cast<minutes>(_Internal_duration{_Info->save});
+            _Sys_info.abbrev = std::string{_Info->abbrev};
             return _Sys_info;
         }
 
@@ -2358,7 +2359,7 @@ namespace chrono {
     };
 
     _NODISCARD inline vector<time_zone> _Xtzdb_generate_time_zones() {
-        unique_ptr<_TzdbInitInfo, decltype(&__std_tzdb_dealloc_init_info)> _Info(
+        unique_ptr<_Tzdb_init_info, decltype(&__std_tzdb_dealloc_init_info)> _Info(
             __std_tzdb_init(), &__std_tzdb_dealloc_init_info);
         if (!_Info) {
             throw std::runtime_error("Failed to initialize tzdb");
