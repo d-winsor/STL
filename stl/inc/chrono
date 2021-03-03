@@ -2188,7 +2188,7 @@ namespace chrono {
                 throw ambiguous_local_time(_Local, _Info);
             }
 
-            return sys_time<_Duration>{_Local.time_since_epoch()} - _Info.first.offset;
+            return sys_time<common_type_t<_Duration, seconds>>{_Local.time_since_epoch()} - _Info.first.offset;
         }
 
         template <class _Duration>
@@ -2203,13 +2203,13 @@ namespace chrono {
 
             auto _Offset = (_Info.result == local_info::unique || _Choose == choose::earliest) ? _Info.first.offset
                                                                                                : _Info.second.offset;
-            return sys_time<_Duration>{_Local.time_since_epoch()} - _Offset;
+            return sys_time<common_type_t<_Duration, seconds>>{_Local.time_since_epoch()} - _Offset;
         }
 
         template <class _Duration>
         _NODISCARD local_time<common_type_t<_Duration, seconds>> to_local(const sys_time<_Duration>& _Sys) const {
             auto _Info = get_info(_Sys);
-            return {(_Sys + _Info.offset).time_since_epoch()};
+            return local_time<common_type_t<_Duration, seconds>>{(_Sys + _Info.offset).time_since_epoch()};
         }
 
     private:
