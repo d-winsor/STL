@@ -177,36 +177,35 @@ void timezone_names_test() {
 
 void timezone_sys_info_test() {
     const auto& tzdb = get_tzdb();
-
-    auto utc_zone = tzdb.locate_zone("UTC");
-    assert(utc_zone != nullptr);
-    auto min_utc = utc_zone->get_info(min_date);
-    auto max_utc = utc_zone->get_info(max_date);
-    // Only a single transition in UTC
-    assert(min_utc == max_utc);
-    assert(min_utc.begin != sys_seconds{});
-    assert(min_utc.end != sys_seconds{});
-    // FIXME: data loss in double -> long long
-    // assert(min_utc.begin < max_utc.end);
-
+    {
+        auto utc_zone = tzdb.locate_zone("UTC");
+        assert(utc_zone != nullptr);
+        auto min_utc = utc_zone->get_info(min_date);
+        auto max_utc = utc_zone->get_info(max_date);
+        // Only a single transition in UTC
+        assert(min_utc == max_utc);
+        assert(min_utc.begin != sys_seconds{});
+        assert(min_utc.end != sys_seconds{});
+        // FIXME: data loss in double -> long long
+        // assert(min_utc.begin < max_utc.end);
+    }
     {
         using namespace Sydney;
-        auto sydney_tz = tzdb.locate_zone(tz_name);
-        assert(sydney_tz != nullptr);
-        validate_timezone_transitions(sydney_tz, daylight_2019, standard_2020, daylight_2020, standard_offset,
-            daylight_offset, "GMT+10",
-            "GMT+11"); // FIXME: IANA database == "AEST/AEDT"
+        auto tz = tzdb.locate_zone(tz_name);
+        assert(tz != nullptr);
+        validate_timezone_transitions(tz, daylight_2019, standard_2020, daylight_2020, standard_offset, daylight_offset,
+            "GMT+10", "GMT+11"); // FIXME: IANA database == "AEST/AEDT"
     }
     {
         using namespace LA;
-        auto la_tz = tzdb.locate_zone(tz_name);
-        assert(la_tz != nullptr);
+        auto tz = tzdb.locate_zone(tz_name);
+        assert(tz != nullptr);
         validate_timezone_transitions(
-            la_tz, daylight_2020, standard_2020, daylight_2021, standard_offset, daylight_offset, "PST", "PDT");
+            tz, daylight_2020, standard_2020, daylight_2021, standard_offset, daylight_offset, "PST", "PDT");
 
         // Test abbrevations other than standard/daylight savings such as war time.
         // These senarios are not handled correctly by icu.dll
-        auto war_time = la_tz->get_info(sys_days{year{1942} / April / day{1}});
+        auto war_time = tz->get_info(sys_days{year{1942} / April / day{1}});
         assert(war_time.abbrev == "PDT"); // IANA datbase == "PWT"
     }
 }
@@ -218,22 +217,16 @@ void timezone_local_info_test() {
         using namespace Sydney;
         auto tz = tzdb.locate_zone(Sydney::tz_name);
         assert(tz != nullptr);
-
-        // AEDT to AEST
-        validate_get_local_info(tz, standard_2020, local_info::ambiguous);
-        // AEST to AEDT
-        validate_get_local_info(tz, daylight_2020, local_info::nonexistent);
+        validate_get_local_info(tz, standard_2020, local_info::ambiguous); // AEDT to AEST
+        validate_get_local_info(tz, daylight_2020, local_info::nonexistent); // AEST to AEDT
     }
     {
         // negative offset (UTC-8/-7) can fall in next transition
         using namespace LA;
         auto tz = tzdb.locate_zone(tz_name);
         assert(tz != nullptr);
-
-        // PDT to PST
-        validate_get_local_info(tz, standard_2020, local_info::ambiguous);
-        // PST to PDT
-        validate_get_local_info(tz, daylight_2021, local_info::nonexistent);
+        validate_get_local_info(tz, standard_2020, local_info::ambiguous); // PDT to PST
+        validate_get_local_info(tz, daylight_2021, local_info::nonexistent); // PST to PDT
     }
 }
 
