@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <chrono>
+#include <memory>
 #include <string>
 #include <vector>
 #include <xtzdb.h>
@@ -78,47 +79,60 @@ namespace {
         return _UT8_str;
     }
 
-    const UErrorCode _Get_sys_time(UCalendar* _Cal, _Sys_time_info* _Info) {
-        UErrorCode ec{};
-        if (_Icu::ucal_inDaylightTime(_Cal, &ec)) {
-            if (U_SUCCESS(ec)) {
-                _Info->save = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_DST_OFFSET, &ec);
+    std::unique_ptr<_Sys_time_info, decltype(&__std_tzdb_dealloc_sys_info)> _Get_sys_time(
+        UCalendar* _Cal, _SysTimeRep _Sys, UErrorCode& _Err) {
+        std::unique_ptr<_Sys_time_info, decltype(&__std_tzdb_dealloc_sys_info)> _Info{
+            new _Sys_time_info{}, &__std_tzdb_dealloc_sys_info};
+
+        _Icu::ucal_setMillis(_Cal, _Sys, &_Err);
+
+        if (U_SUCCESS(_Err) && _Icu::ucal_inDaylightTime(_Cal, &_Err)) {
+            if (U_SUCCESS(_Err)) {
+                _Info->save = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_DST_OFFSET, &_Err);
             }
 
-            if (U_SUCCESS(ec)) {
-                _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &ec) + _Info->save;
+            if (U_SUCCESS(_Err)) {
+                _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &_Err) + _Info->save;
             }
-        } else if (U_SUCCESS(ec)) {
-            _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &ec);
+        } else if (U_SUCCESS(_Err)) {
+            _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &_Err);
             _Info->save   = 0;
         }
 
-        if (U_SUCCESS(ec)) {
-            UDate _Begin{};
-            _Info->begin = _Icu::ucal_getTimeZoneTransitionDate(
-                               _Cal, UTimeZoneTransitionType::UCAL_TZ_TRANSITION_PREVIOUS_INCLUSIVE, &_Begin, &ec)
-                             ? _Begin
-                             : U_DATE_MIN;
+        if (U_SUCCESS(_Err)) {
+            _Info->save = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_DST_OFFSET, &_Err);
         }
 
-        if (U_SUCCESS(ec)) {
-            UDate _End{};
-            _Info->end =
-                _Icu::ucal_getTimeZoneTransitionDate(_Cal, UTimeZoneTransitionType::UCAL_TZ_TRANSITION_NEXT, &_End, &ec)
-                    ? _End
-                    : U_DATE_MAX;
+        if (U_SUCCESS(_Err)
+            && !_Icu::ucal_getTimeZoneTransitionDate(
+                _Cal, UTimeZoneTransitionType::UCAL_TZ_TRANSITION_PREVIOUS_INCLUSIVE, &_Info->begin, &_Err)) {
+            _Info->begin = U_DATE_MIN;
         }
 
-        auto _Display_type =
-            _Info->save == 0 ? UCalendarDisplayNameType::UCAL_SHORT_STANDARD : UCalendarDisplayNameType::UCAL_SHORT_DST;
-        char16_t _Name_buf[256];
-        auto _Name_buf_len =
-            _Icu::ucal_getTimeZoneDisplayName(_Cal, _Display_type, nullptr, _Name_buf, sizeof(_Name_buf), &ec);
-        if (U_SUCCESS(ec)) {
-            _Info->abbrev = _Allocate_UT8_from_UTF16({_Name_buf, static_cast<size_t>(_Name_buf_len)});
+        if (U_SUCCESS(_Err)
+            && !_Icu::ucal_getTimeZoneTransitionDate(
+                _Cal, UTimeZoneTransitionType::UCAL_TZ_TRANSITION_NEXT, &_Info->end, &_Err)) {
+            _Info->end = U_DATE_MAX;
         }
 
-        return ec;
+        if (U_SUCCESS(_Err)) {
+            auto _Display_type = _Info->save == 0 ? UCalendarDisplayNameType::UCAL_SHORT_STANDARD
+                                                  : UCalendarDisplayNameType::UCAL_SHORT_DST;
+            char16_t _Name_buf[256];
+            auto _Name_buf_len =
+                _Icu::ucal_getTimeZoneDisplayName(_Cal, _Display_type, nullptr, _Name_buf, sizeof(_Name_buf), &_Err);
+            if (U_SUCCESS(_Err)) {
+                _Info->abbrev = _Allocate_UT8_from_UTF16({_Name_buf, static_cast<size_t>(_Name_buf_len)});
+            }
+        }
+
+        return _Info;
+    }
+
+    void ucal_destructor(UCalendar* _Cal) {
+        if (_Cal) {
+            _Icu::ucal_close(_Cal);
+        }
     }
 
 } // namespace
@@ -178,45 +192,55 @@ void __stdcall __std_decalloc_reg_leap_seconds(_RegistryLeapSecondInfo* _Rlsi) {
 _NODISCARD _Tzdb_init_info* __stdcall __std_tzdb_init() {
     // Dynamically load icu.dll and required function ptrs
     _Icu::load_module();
-    UErrorCode ec{};
-    UEnumeration* _Enumeration = _Icu::ucal_openTimeZones(&ec);
-    if (!_Enumeration) {
-        return nullptr;
-    }
 
-    int32_t _Elem_len{};
     std::vector<std::u16string> _TimeZone_ids;
-    while (auto* _Elem = _Icu::uenum_unext(_Enumeration, &_Elem_len, &ec)) {
-        if (U_FAILURE(ec)) {
-            _Icu::uenum_close(_Enumeration);
+    {
+        UErrorCode _Err{};
+        std::unique_ptr<UEnumeration, decltype(_Icu::uenum_close)> _Enumeration{
+            _Icu::ucal_openTimeZones(&_Err), _Icu::uenum_close};
+        if (!_Enumeration || U_FAILURE(_Err)) {
             return nullptr;
         }
 
-        _TimeZone_ids.push_back({_Elem, static_cast<size_t>(_Elem_len)});
+        int32_t _Elem_len{};
+        while (auto* _Elem = _Icu::uenum_unext(_Enumeration.get(), &_Elem_len, &_Err)) {
+            if (U_FAILURE(_Err)) {
+                return nullptr;
+            }
+
+            _TimeZone_ids.push_back({_Elem, static_cast<size_t>(_Elem_len)});
+        }
     }
 
-    _Icu::uenum_close(_Enumeration);
-
-    auto _Info             = new _Tzdb_init_info();
-    _Info->_Num_time_zones = _TimeZone_ids.size();
-    _Info->_Names          = new const char*[_Info->_Num_time_zones];
+    std::unique_ptr<_Tzdb_init_info, decltype(&__std_tzdb_dealloc_init_info)> _Info{
+        new _Tzdb_init_info{_TimeZone_ids.size(), new const char*[_TimeZone_ids.size()]},
+        &__std_tzdb_dealloc_init_info};
     for (size_t i = 0; i < _Info->_Num_time_zones; i++) {
         _Info->_Names[i] = _Allocate_UT8_from_UTF16(_TimeZone_ids[i]);
+        if (!_Info->_Names[i]) {
+            return nullptr;
+        }
     }
 
-    return _Info;
+    return _Info.release();
 }
 
 void __stdcall __std_tzdb_dealloc_init_info(_Tzdb_init_info* _Info) {
+    for (size_t i = 0; i < _Info->_Num_time_zones; i++) {
+        if (_Info->_Names[i]) {
+            delete[] _Info->_Names[i];
+        }
+    }
+
     delete[] _Info->_Names;
     delete _Info;
 }
 
 _NODISCARD const char* __stdcall __std_tzdb_get_current_zone() {
-    UErrorCode ec{};
+    UErrorCode _Err{};
     char16_t _Id_buf[256];
-    auto _Id_buf_len = _Icu::ucal_getDefaultTimeZone(_Id_buf, sizeof(_Id_buf), &ec);
-    if (U_FAILURE(ec) && _Id_buf_len != 0) {
+    auto _Id_buf_len = _Icu::ucal_getDefaultTimeZone(_Id_buf, sizeof(_Id_buf), &_Err);
+    if (U_FAILURE(_Err) && _Id_buf_len != 0) {
         return nullptr;
     }
 
@@ -228,26 +252,18 @@ void __stdcall __std_tzdb_dealloc_current_zone(const char* _Tz) {
 }
 
 _NODISCARD _Sys_time_info* __stdcall __std_tzbd_get_sys_info(const char* _Tz, size_t _Tz_len, _SysTimeRep _Sys) {
-    UErrorCode ec{};
+    UErrorCode _Err{};
     auto _Tz_name = _Covert_UT8_to_UTF16({_Tz, _Tz_len});
-    auto _Cal     = _Icu::ucal_open(_Tz_name.c_str(), _Tz_name.length(), nullptr, UCalendarType::UCAL_DEFAULT, &ec);
+    std::unique_ptr<void*, decltype(_Icu::ucal_close)> _Cal{
+        _Icu::ucal_open(_Tz_name.c_str(), _Tz_name.length(), nullptr, UCalendarType::UCAL_DEFAULT, &_Err),
+        _Icu::ucal_close};
 
-    if (U_SUCCESS(ec)) {
-        _Icu::ucal_setMillis(_Cal, _Sys, &ec);
+    auto _Curr_info = _Get_sys_time(_Cal.get(), _Sys, _Err);
+    if (U_FAILURE(_Err)) {
+        return nullptr;
     }
 
-    auto _Info = new _Sys_time_info;
-    if (U_SUCCESS(ec)) {
-        ec = _Get_sys_time(_Cal, _Info);
-    }
-
-    _Icu::ucal_close(_Cal);
-    if (U_FAILURE(ec)) {
-        __std_tzdb_dealloc_sys_info(_Info);
-        _Info = nullptr;
-    }
-
-    return _Info;
+    return _Curr_info.release();
 }
 
 void __stdcall __std_tzdb_dealloc_sys_info(_Sys_time_info* _Info) {
@@ -261,108 +277,104 @@ void __stdcall __std_tzdb_dealloc_sys_info(_Sys_time_info* _Info) {
 }
 
 _NODISCARD _Local_time_info* __stdcall __std_tzbd_get_local_info(const char* _Tz, size_t _Tz_len, _SysTimeRep _Local) {
-    UErrorCode ec{};
+    UErrorCode _Err{};
     auto _Tz_name = _Covert_UT8_to_UTF16({_Tz, _Tz_len});
-    auto _Cal     = _Icu::ucal_open(_Tz_name.c_str(), _Tz_name.length(), nullptr, UCalendarType::UCAL_DEFAULT, &ec);
-    if (U_SUCCESS(ec)) {
-        _Icu::ucal_setMillis(_Cal, _Local, &ec);
+    std::unique_ptr<void*, decltype(_Icu::ucal_close)> _Cal{
+        _Icu::ucal_open(_Tz_name.c_str(), _Tz_name.length(), nullptr, UCalendarType::UCAL_DEFAULT, &_Err),
+        ucal_destructor};
+    if (U_FAILURE(_Err)) {
+        return nullptr;
     }
 
-    auto _Info = new _Local_time_info{};
-    if (U_SUCCESS(ec)) {
-        _Info->first = new _Sys_time_info;
-        ec           = _Get_sys_time(_Cal, _Info->first);
+    auto _Curr_info = _Get_sys_time(_Cal.get(), _Local, _Err);
+    if (U_FAILURE(_Err)) {
+        return nullptr;
     }
 
-    if (U_SUCCESS(ec)) {
-        // validate the edge cases when the local time is within 1 day of transition boundaries
-        const auto _Curr_sys = _Local - _Info->first->offset;
-        if (_Info->first->begin != U_DATE_MIN && _Curr_sys < _Info->first->begin + U_MILLIS_PER_DAY) {
-            // get previous transition information
-            if (U_SUCCESS(ec)) {
-                _Icu::ucal_setMillis(_Cal, _Info->first->begin - 1, &ec);
-            }
+    std::unique_ptr<_Local_time_info, decltype(&__std_tzdb_dealloc_local_info)> _Info{
+        new _Local_time_info{}, &__std_tzdb_dealloc_local_info};
 
-            auto _Prev_info = new _Sys_time_info;
-            if (U_SUCCESS(ec)) {
-                ec = _Get_sys_time(_Cal, _Prev_info);
-            }
+    // validate the edge cases when the local time is within 1 day of transition boundaries
+    const auto _Curr_sys = _Local - _Curr_info->offset;
+    if (_Curr_info->begin != U_DATE_MIN && _Curr_sys < _Curr_info->begin + U_MILLIS_PER_DAY) {
+        // get previous transition information
+        auto _Prev_info = _Get_sys_time(_Cal.get(), _Curr_info->begin - 1, _Err);
+        if (U_FAILURE(_Err)) {
+            return nullptr;
+        }
 
-            const auto _Transition = _Info->first->begin;
-            const auto _Prev_sys = _Local - _Prev_info->offset;
-            if (_Curr_sys >= _Transition) {
-                if (_Prev_sys < _Transition) {
-                    // Curr:    [-x-----
-                    // Prev: -----x-)
-                    _Info->result = std::chrono::local_info::ambiguous;
-                    _Info->second = _Info->first;
-                    _Info->first  = _Prev_info;
-                } else {
-                    // Curr:      [---x-
-                    // Prev: ---)???)
-                    __std_tzdb_dealloc_sys_info(_Prev_info);
-                }
+        const auto _Transition = _Curr_info->begin;
+        const auto _Prev_sys   = _Local - _Prev_info->offset;
+        if (_Curr_sys >= _Transition) {
+            if (_Prev_sys < _Transition) {
+                // Curr:    [-x-----
+                // Prev: -----x-)
+                _Info->result = std::chrono::local_info::ambiguous;
+                _Info->first  = _Prev_info.release();
+                _Info->second = _Curr_info.release();
             } else {
-                if (_Prev_sys >= _Transition) {
-                    // Curr:      x [---
-                    // Prev: ---) x
-                    _Info->result = std::chrono::local_info::nonexistent;
-                    _Info->second = _Info->first;
-                    _Info->first  = _Prev_info;
-                } else {
-                    // Curr:    [???[---
-                    // Prev: -x---)
-                    __std_tzdb_dealloc_sys_info(_Info->first);
-                    _Info->first = _Prev_info;
-                }
+                // Curr:      [---x-
+                // Prev: ---)???)
+                _Info->result = std::chrono::local_info::unique;
+                _Info->first  = _Curr_info.release();
             }
-        } else if (_Info->first->end != U_DATE_MAX && _Curr_sys > _Info->first->end - U_MILLIS_PER_DAY) {
-            // get next transition information
-            if (U_SUCCESS(ec)) {
-                _Icu::ucal_setMillis(_Cal, _Info->first->end + 1, &ec);
-            }
-
-            auto _Next_info = new _Sys_time_info;
-            if (U_SUCCESS(ec)) {
-                ec = _Get_sys_time(_Cal, _Next_info);
-            }
-
-            const auto _Transition = _Info->first->end;
-            const auto _Next_sys = _Local - _Next_info->offset;
-            if (_Curr_sys < _Transition) {
-                if (_Next_sys >= _Transition) {
-                    // Curr: -----x-)
-                    // Next:    [-x-----
-                    _Info->result = std::chrono::local_info::ambiguous;
-                    _Info->second = _Next_info;
-                } else {
-                    // Curr: -x---)
-                    // Next:    [???[---
-                    __std_tzdb_dealloc_sys_info(_Next_info);
-                }
+        } else {
+            if (_Prev_sys >= _Transition) {
+                // Curr:      x [---
+                // Prev: ---) x
+                _Info->result = std::chrono::local_info::nonexistent;
+                _Info->first  = _Prev_info.release();
+                _Info->second = _Curr_info.release();
             } else {
-                if (_Next_sys < _Transition) {
-                    // Curr: ---) x
-                    // Next:      x [---
-                    _Info->result = std::chrono::local_info::nonexistent;
-                    _Info->second = _Next_info;
-                } else {
-                    // Curr: ---)???)
-                    // Next:      [----x-
-                    __std_tzdb_dealloc_sys_info(_Info->first);
-                    _Info->first = _Next_info;
-                }
+                // Curr:    [???[---
+                // Prev: -x---)
+                _Info->result = std::chrono::local_info::unique;
+                _Info->first  = _Prev_info.release();
             }
         }
+    } else if (_Curr_info->end != U_DATE_MAX && _Curr_sys > _Curr_info->end - U_MILLIS_PER_DAY) {
+        // get next transition information
+        auto _Next_info = _Get_sys_time(_Cal.get(), _Curr_info->end + 1, _Err);
+        if (U_FAILURE(_Err)) {
+            return nullptr;
+        }
+
+        const auto _Transition = _Curr_info->end;
+        const auto _Next_sys   = _Local - _Next_info->offset;
+        if (_Curr_sys < _Transition) {
+            if (_Next_sys >= _Transition) {
+                // Curr: -----x-)
+                // Next:    [-x-----
+                _Info->result = std::chrono::local_info::ambiguous;
+                _Info->first  = _Curr_info.release();
+                _Info->second = _Next_info.release();
+            } else {
+                // Curr: -x---)
+                // Next:    [???[---
+                _Info->result = std::chrono::local_info::unique;
+                _Info->first  = _Curr_info.release();
+            }
+        } else {
+            if (_Next_sys < _Transition) {
+                // Curr: ---) x
+                // Next:      x [---
+                _Info->result = std::chrono::local_info::nonexistent;
+                _Info->first  = _Curr_info.release();
+                _Info->second = _Next_info.release();
+            } else {
+                // Curr: ---)???)
+                // Next:      [----x-
+                _Info->result = std::chrono::local_info::unique;
+                _Info->first  = _Next_info.release();
+            }
+        }
+    } else {
+        // local time is contained inside of _Curr_info transition boundaries by atleast 1 day
+        _Info->result = std::chrono::local_info::unique;
+        _Info->first  = _Curr_info.release();
     }
 
-    _Icu::ucal_close(_Cal);
-    if (U_FAILURE(ec)) {
-        __std_tzdb_dealloc_local_info(_Info);
-        _Info = nullptr;
-    }
-
-    return _Info;
+    return _Info.release();
 }
 
 void __stdcall __std_tzdb_dealloc_local_info(_Local_time_info* _Info) {
