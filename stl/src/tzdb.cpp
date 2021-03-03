@@ -86,7 +86,7 @@ namespace {
             }
 
             if (U_SUCCESS(ec)) {
-                _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &ec) - _Info->save;
+                _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &ec) + _Info->save;
             }
         } else if (U_SUCCESS(ec)) {
             _Info->offset = _Icu::ucal_get(_Cal, UCalendarDateFields::UCAL_ZONE_OFFSET, &ec);
@@ -268,7 +268,7 @@ _NODISCARD _Local_time_info* __stdcall __std_tzbd_get_local_info(const char* _Tz
         _Icu::ucal_setMillis(_Cal, _Local, &ec);
     }
 
-    auto _Info = new _Local_time_info;
+    auto _Info = new _Local_time_info{};
     if (U_SUCCESS(ec)) {
         _Info->first = new _Sys_time_info;
         ec           = _Get_sys_time(_Cal, _Info->first);
@@ -276,13 +276,8 @@ _NODISCARD _Local_time_info* __stdcall __std_tzbd_get_local_info(const char* _Tz
 
     if (U_SUCCESS(ec)) {
         // validate the edge cases when the local time is within 1 day of transition boundaries
-        //
-        // ambiguous             2am    |   nonexistent       2am
-        // T1: PST-08:00  ----xxx|      |   T1: PDT-07:00  ---|xxx
-        // T2: PDT-07:00     |xxx----   |   T2: PST-08:00      xxx|---
-        //                   1am        |                         3am
-        const auto _Sys = _Local - _Info->first->offset;
-        if (_Info->first->begin != U_DATE_MIN && _Sys < _Info->first->begin + U_MILLIS_PER_DAY) {
+        const auto _Curr_sys = _Local - _Info->first->offset;
+        if (_Info->first->begin != U_DATE_MIN && _Curr_sys < _Info->first->begin + U_MILLIS_PER_DAY) {
             // get previous transition information
             if (U_SUCCESS(ec)) {
                 _Icu::ucal_setMillis(_Cal, _Info->first->begin - 1, &ec);
@@ -293,24 +288,35 @@ _NODISCARD _Local_time_info* __stdcall __std_tzbd_get_local_info(const char* _Tz
                 ec = _Get_sys_time(_Cal, _Prev_info);
             }
 
-            if (_Sys < _Prev_info->end) {
-                if (_Sys >= _Info->first->begin) {
+            const auto _Transition = _Info->first->begin;
+            const auto _Prev_sys = _Local - _Prev_info->offset;
+            if (_Curr_sys >= _Transition) {
+                if (_Prev_sys < _Transition) {
+                    // Curr:    [-x-----
+                    // Prev: -----x-)
                     _Info->result = std::chrono::local_info::ambiguous;
                     _Info->second = _Info->first;
                     _Info->first  = _Prev_info;
                 } else {
+                    // Curr:      [---x-
+                    // Prev: ---)???)
+                    __std_tzdb_dealloc_sys_info(_Prev_info);
+                }
+            } else {
+                if (_Prev_sys >= _Transition) {
+                    // Curr:      x [---
+                    // Prev: ---) x
+                    _Info->result = std::chrono::local_info::nonexistent;
+                    _Info->second = _Info->first;
+                    _Info->first  = _Prev_info;
+                } else {
+                    // Curr:    [???[---
+                    // Prev: -x---)
                     __std_tzdb_dealloc_sys_info(_Info->first);
                     _Info->first = _Prev_info;
                 }
-            } else if (_Sys < _Info->first->begin) {
-                _Info->result = std::chrono::local_info::nonexistent;
-                _Info->second = _Info->first;
-                _Info->first  = _Prev_info;
-            } else {
-                __std_tzdb_dealloc_sys_info(_Prev_info);
             }
-
-        } else if (_Info->first->end != U_DATE_MAX && _Sys > _Info->first->end - U_MILLIS_PER_DAY) {
+        } else if (_Info->first->end != U_DATE_MAX && _Curr_sys > _Info->first->end - U_MILLIS_PER_DAY) {
             // get next transition information
             if (U_SUCCESS(ec)) {
                 _Icu::ucal_setMillis(_Cal, _Info->first->end + 1, &ec);
@@ -321,19 +327,31 @@ _NODISCARD _Local_time_info* __stdcall __std_tzbd_get_local_info(const char* _Tz
                 ec = _Get_sys_time(_Cal, _Next_info);
             }
 
-            if (_Sys >= _Next_info->begin) {
-                if (_Sys < _Info->first->end) {
+            const auto _Transition = _Info->first->end;
+            const auto _Next_sys = _Local - _Next_info->offset;
+            if (_Curr_sys < _Transition) {
+                if (_Next_sys >= _Transition) {
+                    // Curr: -----x-)
+                    // Next:    [-x-----
                     _Info->result = std::chrono::local_info::ambiguous;
                     _Info->second = _Next_info;
                 } else {
+                    // Curr: -x---)
+                    // Next:    [???[---
+                    __std_tzdb_dealloc_sys_info(_Next_info);
+                }
+            } else {
+                if (_Next_sys < _Transition) {
+                    // Curr: ---) x
+                    // Next:      x [---
+                    _Info->result = std::chrono::local_info::nonexistent;
+                    _Info->second = _Next_info;
+                } else {
+                    // Curr: ---)???)
+                    // Next:      [----x-
                     __std_tzdb_dealloc_sys_info(_Info->first);
                     _Info->first = _Next_info;
                 }
-            } else if (_Sys > _Info->first->end) {
-                _Info->result = std::chrono::local_info::nonexistent;
-                _Info->second = _Next_info;
-            } else {
-                __std_tzdb_dealloc_sys_info(_Next_info);
             }
         }
     }
