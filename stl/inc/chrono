@@ -2375,13 +2375,17 @@ namespace chrono {
     // [time.zone.db]
 
     _NODISCARD inline string _Xtzdb_generate_current_zone() {
-        unique_ptr<const char[], decltype(&__std_tzdb_delete_current_zone)> _Tz_name{
+        unique_ptr<__std_tzdb_current_zone_info, decltype(&__std_tzdb_delete_current_zone)> _Info{
             __std_tzdb_get_current_zone(), &__std_tzdb_delete_current_zone};
-        if (_Tz_name == nullptr) {
+        if (_Info == nullptr) {
+            _Xbad_alloc();
+        } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
             _XGetLastError();
+        } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
+            _Xruntime_error("FIXME: what generic message should I use here?");
         }
 
-        return {_Tz_name.get()};
+        return {_Info->_Tz_name};
     }
 
     template <class _Ty>
@@ -2417,7 +2421,11 @@ namespace chrono {
         unique_ptr<__std_tzdb_time_zones_info, decltype(&__std_tzdb_delete_time_zones)> _Info{
             __std_tzdb_get_time_zones(), &__std_tzdb_delete_time_zones};
         if (_Info == nullptr) {
+            _Xbad_alloc();
+        } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
             _XGetLastError();
+        } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
+            _Xruntime_error("FIXME: what generic message should I use here?");
         }
 
         decltype(tzdb::time_zones) _Time_zones;
