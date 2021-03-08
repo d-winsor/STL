@@ -29,7 +29,23 @@ struct __std_tzdb_registry_leap_info {
     uint16_t _Reserved;
 };
 
+struct __std_tzdb_time_zones_info {
+    size_t _Num_time_zones;
+    // ordered list of nullterminated time_zone/time_zone_link names
+    const char** _Names;
+    // contains corrosponding entry for every name, if:
+    //    (_Link[i] == nullptr) then _Names[i] is a time_zone
+    //    (_Link[i] != nullptr) then _Names[i] is a time_zone_link to time_zone with name _Link[i]
+    const char** _Links;
+};
+
 _EXTERN_C
+
+_NODISCARD __std_tzdb_time_zones_info* __stdcall __std_tzdb_get_time_zones() noexcept;
+void __stdcall __std_tzdb_delete_time_zones(__std_tzdb_time_zones_info* _Info) noexcept;
+
+_NODISCARD const char* __stdcall __std_tzdb_get_current_zone() noexcept;
+void __stdcall __std_tzdb_delete_current_zone(const char* _Tz) noexcept;
 
 __std_tzdb_registry_leap_info* __stdcall __std_tzdb_get_reg_leap_seconds(
     size_t _Prev_reg_ls_size, size_t* _Current_reg_ls_size) noexcept;
