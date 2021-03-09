@@ -2443,6 +2443,15 @@ namespace chrono {
         return {_Time_zones, _Time_zone_links};
     }
 
+    // [time.zone.db]
+
+    // TRANSITION: work in progress
+    // STRUCT tzdb
+    struct tzdb {
+        vector<leap_second, _Crt_allocator<leap_second>> leap_seconds;
+        bool _All_ls_positive;
+    };
+
     _NODISCARD inline pair<decltype(tzdb::leap_seconds), bool> _Xtzdb_generate_leap_seconds(
         const size_t _Current_size) {
         // Returns empty vector if no new leap seconds are found.
