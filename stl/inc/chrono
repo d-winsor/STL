@@ -2271,42 +2271,69 @@ namespace chrono {
 
         template <class _Duration>
         _NODISCARD sys_info get_info(const sys_time<_Duration>& _Sys) const {
-            using rep    = typename _Duration::rep;
-            using period = typename _Duration::period;
-            auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Sys.time_since_epoch());
-            std::unique_ptr<__std_tzbd_sys_info, decltype(&__std_tzdb_delete_sys_info)> _Info(
-                __std_tzbd_get_sys_info(_Name.c_str(), _Name.length(), _Dur.count()), &__std_tzdb_delete_sys_info);
-            if (_Info == nullptr) {
-                _Xbad_alloc();
-            } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
-                _XGetLastError();
-            } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
-                _Xruntime_error("FIXME: what generic message should I use here?");
-            }
-
-            return _Convert_sys_info(_Info->_Data);
+            return _Get_info(_Sys.time_since_epoch());
         }
 
         template <class _Duration>
         _NODISCARD local_info get_info(const local_time<_Duration>& _Local) const {
-            using rep    = typename _Duration::rep;
-            using period = typename _Duration::period;
-            auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Local.time_since_epoch());
-            std::unique_ptr<__std_tzbd_local_info, decltype(&__std_tzdb_delete_local_info)> _Info(
-                __std_tzbd_get_local_info(_Name.c_str(), _Name.length(), _Dur.count()), &__std_tzdb_delete_local_info);
-            if (_Info == nullptr) {
-                _Xbad_alloc();
-            } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
-                _XGetLastError();
-            } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
-                _Xruntime_error("FIXME: what generic message should I use here?");
+            local_info _Info{};
+            _Info.first = _Get_info(_Local.time_since_epoch());
+
+            const sys_seconds _Local_sys{duration_cast<sys_seconds::duration>(_Local.time_since_epoch())};
+            const auto _Curr_sys = _Local_sys - _Info.first.offset;
+            if (_Info.first.begin != _Min_seconds && _Curr_sys < _Info.first.begin + days{1}) {
+                // get previous transition information
+                _Info.second = get_info(_Info.first.begin - seconds{1});
+
+                const auto _Transition = _Info.first.begin;
+                const auto _Prev_sys   = _Local_sys - _Info.second.offset;
+                if (_Curr_sys >= _Transition) {
+                    if (_Prev_sys < _Transition) {
+                        _Info.result = local_info::ambiguous;
+                        std::swap(_Info.first, _Info.second);
+                    } else {
+                        _Info.result = local_info::unique;
+                        _Info.second = {};
+                    }
+                } else {
+                    if (_Prev_sys >= _Transition) {
+                        _Info.result = local_info::nonexistent;
+                        std::swap(_Info.first, _Info.second);
+                    } else {
+                        _Info.result = local_info::unique;
+                        _Info.first  = std::move(_Info.second);
+                        _Info.second = {};
+                    }
+                }
+            } else if (_Info.first.end != _Max_seconds && _Curr_sys > _Info.first.end - days{1}) {
+                // get next transition information
+                _Info.second = get_info(_Info.first.end + seconds{1});
+
+                const auto _Transition = _Info.first.end;
+                const auto _Next_sys   = _Local_sys - _Info.second.offset;
+                if (_Curr_sys < _Transition) {
+                    if (_Next_sys >= _Transition) {
+                        _Info.result = local_info::ambiguous;
+                    } else {
+                        _Info.result = local_info::unique;
+                        _Info.second = {};
+                    }
+                } else {
+                    if (_Next_sys < _Transition) {
+                        _Info.result = local_info::nonexistent;
+                    } else {
+                        _Info.result = local_info::unique;
+                        _Info.first  = std::move(_Info.second);
+                        _Info.second = {};
+                    }
+                }
+            } else {
+                // local time is contained inside of first transition boundaries by at least 1 day
+                _Info.result = local_info::unique;
+                _Info.second = {};
             }
 
-            local_info _Local_info;
-            _Local_info.result = _Info->_Result;
-            _Local_info.first  = _Convert_sys_info(_Info->_First);
-            _Local_info.second = _Info->_Result != local_info::unique ? _Convert_sys_info(_Info->_Second) : sys_info{};
-            return _Local_info;
+            return _Info;
         }
 
         template <class _Duration>
@@ -2327,7 +2354,6 @@ namespace chrono {
             auto _Info   = get_info(_Local);
             auto _Result = sys_time<_Duration>{_Local.time_since_epoch()};
             if (_Info.result == local_info::nonexistent) {
-                // local times that don't exist are equivalent to the same time in UTC
                 return _Info.first.end;
             }
 
@@ -2342,16 +2368,37 @@ namespace chrono {
             return local_time<common_type_t<_Duration, seconds>>{(_Sys + _Info.offset).time_since_epoch()};
         }
 
+        // FIXME: year::max() + year::min()
+        static constexpr sys_seconds _Min_seconds{sys_days{year{-32767} / January / 1}};
+        static constexpr sys_seconds _Max_seconds{sys_days{year{32767} / December / 31}};
 
     private:
-        static sys_info _Convert_sys_info(const __std_tzdb_sys_data& _Data) {
-            sys_info _Info{};
-            _Info.begin  = sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Data.begin})};
-            _Info.end    = sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Data.end})};
-            _Info.offset = duration_cast<seconds>(_Internal_duration{_Data.offset});
-            _Info.save   = duration_cast<minutes>(_Internal_duration{_Data.save});
-            _Info.abbrev = std::string{_Data.abbrev};
-            return _Info;
+        template <class _Duration>
+        _NODISCARD sys_info _Get_info(const _Duration& _Dur) const {
+            auto _Internal_dur = duration_cast<_Internal_duration>(_Dur);
+            std::unique_ptr<__std_tzbd_sys_info, decltype(&__std_tzdb_delete_sys_info)> _Info(
+                __std_tzbd_get_sys_info(_Name.c_str(), _Name.length(), _Internal_dur.count()),
+                &__std_tzdb_delete_sys_info);
+            if (_Info == nullptr) {
+                _Xbad_alloc();
+            } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
+                _XGetLastError();
+            } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
+                _Xruntime_error("FIXME: what generic message should I use here?");
+            }
+
+            sys_info _Sys_info{};
+            _Sys_info.begin =
+                _Info->_Data.begin == __std_tzdb_min_milli
+                    ? _Min_seconds
+                    : sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Info->_Data.begin})};
+            _Sys_info.end    = _Info->_Data.end == __std_tzdb_max_milli
+                                 ? _Max_seconds
+                                 : sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Info->_Data.end})};
+            _Sys_info.offset = duration_cast<seconds>(_Internal_duration{_Info->_Data.offset});
+            _Sys_info.save   = duration_cast<minutes>(_Internal_duration{_Info->_Data.save});
+            _Sys_info.abbrev = std::string{_Info->_Data.abbrev};
+            return _Sys_info;
         }
 
         std::string _Name;

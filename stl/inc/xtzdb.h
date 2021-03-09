@@ -10,6 +10,7 @@
 #if _STL_COMPILER_PREPROCESSOR
 #include <cstddef>
 #include <cstdint>
+#include <float.h>
 #include <type_traits>
 #include <xutility>
 
@@ -21,6 +22,9 @@ _STL_DISABLE_CLANG_WARNINGS
 #undef new
 
 typedef double __std_tzdb_epoch_milli;
+// FIXME: naming scheme?
+constexpr __std_tzdb_epoch_milli __std_tzdb_min_milli = DBL_MIN;
+constexpr __std_tzdb_epoch_milli __std_tzdb_max_milli = DBL_MAX;
 
 struct __std_tzdb_registry_leap_info {
     uint16_t _Year;
