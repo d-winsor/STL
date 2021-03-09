@@ -20,6 +20,8 @@ _STL_DISABLE_CLANG_WARNINGS
 #pragma push_macro("new")
 #undef new
 
+typedef double __std_tzdb_epoch_milli;
+
 struct __std_tzdb_registry_leap_info {
     uint16_t _Year;
     uint16_t _Month;
@@ -46,9 +48,31 @@ struct __std_tzdb_time_zones_info {
     const char** _Links;
 };
 
+
 struct __std_tzdb_current_zone_info {
     __std_tzdb_error _Err;
     const char* _Tz_name;
+};
+
+struct __std_tzdb_sys_data {
+    __std_tzdb_epoch_milli begin;
+    __std_tzdb_epoch_milli end;
+    int32_t offset;
+    int32_t save;
+    const char* abbrev;
+};
+
+struct __std_tzbd_sys_info {
+    __std_tzdb_error _Err;
+    __std_tzdb_sys_data _Data;
+};
+
+struct __std_tzbd_local_info {
+    __std_tzdb_error _Err;
+    int _Result;
+    __std_tzdb_sys_data _First;
+    // undefined value when result == std::chrono::local_info::unique
+    __std_tzdb_sys_data _Second;
 };
 
 _EXTERN_C
@@ -58,6 +82,14 @@ void __stdcall __std_tzdb_delete_time_zones(__std_tzdb_time_zones_info* _Info) n
 
 _NODISCARD __std_tzdb_current_zone_info* __stdcall __std_tzdb_get_current_zone() noexcept;
 void __stdcall __std_tzdb_delete_current_zone(__std_tzdb_current_zone_info* _Info) noexcept;
+
+_NODISCARD __std_tzbd_sys_info* __stdcall __std_tzbd_get_sys_info(
+    const char* _Tz, size_t _Tz_len, __std_tzdb_epoch_milli _Sys) noexcept;
+void __stdcall __std_tzdb_delete_sys_info(__std_tzbd_sys_info* _Info) noexcept;
+
+_NODISCARD __std_tzbd_local_info* __stdcall __std_tzbd_get_local_info(
+    const char* _Tz, size_t _Tz_len, __std_tzdb_epoch_milli _Local) noexcept;
+void __stdcall __std_tzdb_delete_local_info(__std_tzbd_local_info* _Info) noexcept;
 
 __std_tzdb_registry_leap_info* __stdcall __std_tzdb_get_reg_leap_seconds(
     size_t _Prev_reg_ls_size, size_t* _Current_reg_ls_size) noexcept;

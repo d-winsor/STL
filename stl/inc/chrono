@@ -2215,7 +2215,43 @@ namespace chrono {
         return hours{_Ret};
     }
 
+    // [time.zone.info]
+
+    struct sys_info {
+        sys_seconds begin;
+        sys_seconds end;
+        seconds offset;
+        minutes save;
+        string abbrev;
+    };
+
+    struct local_info {
+        static constexpr int unique      = 0;
+        static constexpr int nonexistent = 1;
+        static constexpr int ambiguous   = 2;
+
+        int result;
+        sys_info first;
+        sys_info second;
+    };
+
+    class nonexistent_local_time : public runtime_error {
+    public:
+        template <class Duration>
+        nonexistent_local_time(const local_time<Duration>&, const local_info&)
+            : runtime_error("TRANSITION: work in progress") {}
+    };
+
+    class ambiguous_local_time : public runtime_error {
+    public:
+        template <class Duration>
+        ambiguous_local_time(const local_time<Duration>&, const local_info&)
+            : runtime_error("TRANSITION: work in progress") {}
+    };
+
     // [time.zone.timezone]
+
+    enum class choose { earliest, latest };
 
     // TRANSITION: work in progress
     class time_zone {
@@ -2231,7 +2267,93 @@ namespace chrono {
             return _Name;
         }
 
+        using _Internal_duration = duration<__std_tzdb_epoch_milli, std::milli>;
+
+        template <class _Duration>
+        _NODISCARD sys_info get_info(const sys_time<_Duration>& _Sys) const {
+            using rep    = typename _Duration::rep;
+            using period = typename _Duration::period;
+            auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Sys.time_since_epoch());
+            std::unique_ptr<__std_tzbd_sys_info, decltype(&__std_tzdb_delete_sys_info)> _Info(
+                __std_tzbd_get_sys_info(_Name.c_str(), _Name.length(), _Dur.count()), &__std_tzdb_delete_sys_info);
+            if (_Info == nullptr) {
+                _Xbad_alloc();
+            } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
+                _XGetLastError();
+            } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
+                _Xruntime_error("FIXME: what generic message should I use here?");
+            }
+
+            return _Convert_sys_info(_Info->_Data);
+        }
+
+        template <class _Duration>
+        _NODISCARD local_info get_info(const local_time<_Duration>& _Local) const {
+            using rep    = typename _Duration::rep;
+            using period = typename _Duration::period;
+            auto _Dur    = duration_cast<_Internal_duration, rep, period>(_Local.time_since_epoch());
+            std::unique_ptr<__std_tzbd_local_info, decltype(&__std_tzdb_delete_local_info)> _Info(
+                __std_tzbd_get_local_info(_Name.c_str(), _Name.length(), _Dur.count()), &__std_tzdb_delete_local_info);
+            if (_Info == nullptr) {
+                _Xbad_alloc();
+            } else if (_Info->_Err == __std_tzdb_error::_Win_error) {
+                _XGetLastError();
+            } else if (_Info->_Err == __std_tzdb_error::_Icu_error) {
+                _Xruntime_error("FIXME: what generic message should I use here?");
+            }
+
+            local_info _Local_info;
+            _Local_info.result = _Info->_Result;
+            _Local_info.first  = _Convert_sys_info(_Info->_First);
+            _Local_info.second = _Info->_Result != local_info::unique ? _Convert_sys_info(_Info->_Second) : sys_info{};
+            return _Local_info;
+        }
+
+        template <class _Duration>
+        _NODISCARD sys_time<common_type_t<_Duration, seconds>> to_sys(const local_time<_Duration>& _Local) const {
+            auto _Info = get_info(_Local);
+            if (_Info.result == local_info::nonexistent) {
+                throw nonexistent_local_time(_Local, _Info);
+            } else if (_Info.result == local_info::ambiguous) {
+                throw ambiguous_local_time(_Local, _Info);
+            }
+
+            return sys_time<common_type_t<_Duration, seconds>>{_Local.time_since_epoch()} - _Info.first.offset;
+        }
+
+        template <class _Duration>
+        _NODISCARD sys_time<common_type_t<_Duration, seconds>> to_sys(
+            const local_time<_Duration>& _Local, choose _Choose) const {
+            auto _Info   = get_info(_Local);
+            auto _Result = sys_time<_Duration>{_Local.time_since_epoch()};
+            if (_Info.result == local_info::nonexistent) {
+                // local times that don't exist are equivalent to the same time in UTC
+                return _Info.first.end;
+            }
+
+            auto _Offset = (_Info.result == local_info::unique || _Choose == choose::earliest) ? _Info.first.offset
+                                                                                               : _Info.second.offset;
+            return sys_time<common_type_t<_Duration, seconds>>{_Local.time_since_epoch()} - _Offset;
+        }
+
+        template <class _Duration>
+        _NODISCARD local_time<common_type_t<_Duration, seconds>> to_local(const sys_time<_Duration>& _Sys) const {
+            auto _Info = get_info(_Sys);
+            return local_time<common_type_t<_Duration, seconds>>{(_Sys + _Info.offset).time_since_epoch()};
+        }
+
+
     private:
+        static sys_info _Convert_sys_info(const __std_tzdb_sys_data& _Data) {
+            sys_info _Info{};
+            _Info.begin  = sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Data.begin})};
+            _Info.end    = sys_seconds{duration_cast<sys_seconds::duration>(_Internal_duration{_Data.end})};
+            _Info.offset = duration_cast<seconds>(_Internal_duration{_Data.offset});
+            _Info.save   = duration_cast<minutes>(_Internal_duration{_Data.save});
+            _Info.abbrev = std::string{_Data.abbrev};
+            return _Info;
+        }
+
         std::string _Name;
     };
 
